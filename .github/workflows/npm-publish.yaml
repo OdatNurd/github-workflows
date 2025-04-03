@@ -55,7 +55,7 @@ jobs:
         run: sed -i -e "s/{{VERSION}}/$VERSION/g" package.json
       - name: Install package dependencies
         run: pnpm install --frozen-lockfile
-      # - name: Publish package
-      #   run: pnpm publish --access public --no-git-checks
-      #   env:
-      #     NODE_AUTH_TOKEN: ${{ secrets.npm-auth-token }}
+      - name: Publish package
+        run: pnpm publish --access public --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.npm-auth-token }}
