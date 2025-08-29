@@ -1,21 +1,49 @@
 on:
   workflow_call:
     inputs:
+      # The version of Node.js to use for the workflow steps.
       node-version:
         required: false
         type: number
         default: 20
 
+      # The package version, typically passed from the git tag that triggered
+      # the workflow.
       package-version:
         required: true
         type: string
 
+      # The name of the pnpm script to run for building the package. This step
+      # is skipped if the script does not exist.
+      build-script:
+        required: false
+        type: string
+        default: 'build'
+
+      # The name of the pnpm script to run for testing the package prior to
+      # publishing. This step is skipped if the script does not exist.
+      test-script:
+        required: false
+        type: string
+        default: 'test'
+
+      # A boolean flag to determine whether to create a GitHub Release after a
+      # successful publish.
+      create-release:
+        required: false
+        type: boolean
+        default: false
+
     secrets:
+      # The authentication token required to publish to the npm registry.
       npm-auth-token:
         required: true
 
 jobs:
-  build-package:
+  # This job installs dependencies, optionally builds the package if the script
+  # to do so exists, and runs tests to ensure the package is valid before
+  # publishing.
+  test-package:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,13 +57,21 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
           cache: pnpm
+      - name: Get Package Version from Tag
+        run: echo "VERSION=$(echo ${{ inputs.package-version }} | sed -e "s/^v//")" >> $GITHUB_ENV
+      - name: Update package version in control file
+        run: sed -i -e "s/{{VERSION}}/$VERSION/g" package.json
       - name: Install package dependencies
         run: pnpm install --frozen-lockfile
+      - name: Build package
+        run: pnpm run --if-present ${{ inputs.build-script }}
       - name: Run unit tests
-        run: pnpm run test
+        run: pnpm run --if-present ${{ inputs.test-script }}
 
+  # This job publishes the package to the npm registry. It runs only after the
+  # 'test-package' job has completed successfully.
   publish-npm:
-    needs: build-package
+    needs: test-package
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,7 +91,25 @@ jobs:
         run: sed -i -e "s/{{VERSION}}/$VERSION/g" package.json
       - name: Install package dependencies
         run: pnpm install --frozen-lockfile
+      - name: Build package
+        run: pnpm run --if-present ${{ inputs.build-script }}
       - name: Publish package
         run: pnpm publish --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.npm-auth-token }}
+
+  # This job creates a new GitHub Release. It only runs if the 'publish-npm' job
+  # was successful and the 'create-release' input was set to true.
+  create-github-release:
+    needs: publish-npm
+    if: inputs.create-release == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ inputs.package-version }}
+          name: Release ${{ inputs.package-version }}
+          generate_release_notes: true
