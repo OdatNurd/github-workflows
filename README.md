@@ -3,7 +3,7 @@
 This repository contains reusable GitHub Actions workflows designed to
 standardize and simplify common CI/CD tasks across projects.
 
-  - [NPM Package Publishing](#npm-publish-workflow) \[[npm-publish-v1.0.0](https://github.com/odatnurd/github-workflows/blob/npm-publish-v1.0.0/.github/workflows/npm-publish.yaml)\]
+  - [NPM Package Publishing](#npm-publish-workflow) \[[npm-publish-v1.0.1](https://github.com/odatnurd/github-workflows/blob/npm-publish-v1.0.1/.github/workflows/npm-publish.yaml)\]
 
 ---
 
@@ -67,7 +67,7 @@ jobs:
     # Required only if create-release is true
     permissions:
       contents: write
-    uses: odatnurd/github-workflows/.github/workflows/npm-publish.yaml@npm-publish-v1.0.0
+    uses: odatnurd/github-workflows/.github/workflows/npm-publish.yaml@npm-publish-v1.0.1
     with:
       # Use the user-provided tag if manually triggered, otherwise use the tag
       # from the push event.

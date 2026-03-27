@@ -5,7 +5,7 @@ on:
       node-version:
         required: false
         type: number
-        default: 20
+        default: 24
 
       # The package version, typically passed from the git tag that triggered
       # the workflow.
