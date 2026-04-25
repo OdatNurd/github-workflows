@@ -3,7 +3,7 @@
 This repository contains reusable GitHub Actions workflows designed to
 standardize and simplify common CI/CD tasks across projects.
 
-  - [NPM Package Publishing](#npm-publish-workflow) \[[npm-publish-v1.0.1](https://github.com/odatnurd/github-workflows/blob/npm-publish-v1.0.1/.github/workflows/npm-publish.yaml)\]
+  - [NPM Package Publishing](#npm-publish-workflow) \[[npm-publish-v1.0.2](https://github.com/odatnurd/github-workflows/blob/npm-publish-v1.0.2/.github/workflows/npm-publish.yaml)\]
 
 ---
 
@@ -67,7 +67,7 @@ jobs:
     # Required only if create-release is true
     permissions:
       contents: write
-    uses: odatnurd/github-workflows/.github/workflows/npm-publish.yaml@npm-publish-v1.0.1
+    uses: odatnurd/github-workflows/.github/workflows/npm-publish.yaml@npm-publish-v1.0.2
     with:
       # Use the user-provided tag if manually triggered, otherwise use the tag
       # from the push event.
@@ -112,8 +112,8 @@ secret in the repository that uses this workflow.
 #### How to Set Up the `NPM_PUBLISH` Secret
 
 1.  **Generate an npm Access Token:**
-    * Navigate to the [Access Tokens page](https://www.npmjs.com/settings/your-username/tokens) on your
-      npm account (replace `your-username` with your actual npm username).
+    * Navigate to the [Access Tokens page](https://www.npmjs.com/settings/yourusername/tokens) on your
+      npm account (replace `yourusername` with your actual npm username).
     * Click `Generate New Token` and select the `Granular Access Token` type.
     * Under `Permissions`, select `Read and Write`.
     * Under `Package Permissions`, you can scope the token's access as needed,
