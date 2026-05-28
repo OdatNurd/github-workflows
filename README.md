@@ -3,7 +3,7 @@
 This repository contains reusable GitHub Actions workflows designed to
 standardize and simplify common CI/CD tasks across projects.
 
-  - [NPM Package Publishing](#npm-publish-workflow) \[[npm-publish-v1.0.2](https://github.com/odatnurd/github-workflows/blob/npm-publish-v1.0.2/.github/workflows/npm-publish.yaml)\]
+  - [NPM Package Publishing](#npm-publish-workflow) \[[npm-publish-v1.0.3](https://github.com/odatnurd/github-workflows/blob/npm-publish-v1.0.3/.github/workflows/npm-publish.yaml)\]
 
 ---
 
@@ -11,23 +11,17 @@ standardize and simplify common CI/CD tasks across projects.
 
 This workflow automates the process of testing, building, and publishing a
 Node.js package to the public npm registry and (optionally) creating a
-corresponding GitHub Release.
+corresponding GitHub Release for it.
 
 > [!note]
 > This script specifically uses `pnpm` for all operations, so your mileage may
-> vary if you happen to use a different package manager.
+> vary if you happen to use a different package manager for your package.
 
-This is designed to seamlessly allow packages that either don't have a test
-script, don't have a build step, or both.
-
-When using the Publishing portion of the flow, your repository should contain
-a `CHANGELOG.md` file that outlines how the package changed, since that is
-the body of the release.
-
-In addition, the `package.json` file will be updated such that any reference to
-`{{VERSION}}` is replaced with the `package-version` input; this allows you to
-ensure that your packaged version always references the version number that you
-intended.
+The workflow is designed to seamlessly allow packages that either do not need
+to be built, do not need to be tested, or both. The name of the script that
+carries these operations out is configurable (with a sensible default) and the
+relevant portions of the flow will be skipped if the package does not have
+those scripts.
 
 
 ### Workflow Steps
@@ -41,11 +35,58 @@ graph LR
     B --> C{create-github-release};
 ```
 
+
+### Inputs
+
+The following inputs can be used to customize the workflow's behavior.
+
+| Input            | Description                                                                          | Required | Default   |
+| ---------------- | ------------------------------------------------------------------------------------ | :------: | --------- |
+| `node-version`   | The version of Node.js to use for the workflow steps.                                |    No    | `24`      |
+| `package-version`| The package version, typically passed from the git tag.                              |   Yes    |           |
+| `build-script`   | The name of the pnpm script to run for building the package. Skips if not present.   |    No    | `'build'` |
+| `test-script`    | The name of the pnpm script to run for testing the package. Skips if not present.    |    No    | `'test'`  |
+| `create-release` | Set to `true` to create a GitHub Release after a successful publish.                 |    No    | `false`   |
+
+
+### GitHub Release
+
+If enabled via `create-release`, a successful publish will cause the automatic
+generation of a GitHub release record. The content of the release text comes
+from an automatically generated list of changes between this release and the
+previous one.
+
+Depending on the version being published, the generated release may be marked
+as a pre-release at creation time.
+
+
+### Package versions and NPM Tags
+
+The `package-version` input specifies the version of the package to be
+published, which should be a proper semantic package version; optionally the
+tag may be prefixed with a `v`, which will be stripped away if present.
+
+The resulting version is used update all references to `{{VERSION}}` in the
+`package.json` file; this ensures that your packaged version always references
+the version number that you intended.
+
+When the workflow is analyzing the `package-version` input, it uses the version
+specifier to determine what distribution channel to use:
+
+- *Standard Release*: A standard tag (e.g. `v1.2.3`) will be published with the
+  default `latest` tag and marked as a regular release on GitHub.
+
+- *Prerelease*: If the tag contains a hypehn (e.g. `v1.2.3-alpha.0` or
+  `v2.0.0-next.1`), the workflow automatically uses the appropriate distribution
+  name (in this case, `alpha` or `next`). In this case, the release will be
+  marked as a pre-release when generating the GitHub release.
+
+
 ### Usage
 
 To use this workflow, reference it in your own repository's workflow file. The
 example below enables both automated and manual triggers, though you can use
-either one if desired.
+either one alone, if desired.
 
 ```yaml
 name: Publish to NPMJS
@@ -64,22 +105,24 @@ on:
 
 jobs:
   publish-package:
-    # Required only if create-release is true
     permissions:
-      contents: write
-    uses: odatnurd/github-workflows/.github/workflows/npm-publish.yaml@npm-publish-v1.0.2
+      contents: write # Required to create the GitHub Release
+      id-token: write # Required for NPM OIDC Trusted Publishing
+    uses: odatnurd/github-workflows/.github/workflows/npm-publish.yaml@npm-publish-v1.0.3
     with:
+      node-version: 24
       # Use the user-provided tag if manually triggered, otherwise use the tag
       # from the push event.
       package-version: ${{ (github.event_name == 'workflow_dispatch' && inputs.tag) || github.ref_name }}
+      build-script: 'build'
+      test-script: 'test'
       create-release: true
-    secrets:
-      npm-auth-token: ${{ secrets.NPM_PUBLISH }}
 ```
+
 
 ### Triggering the Workflow
 
-This workflow can be triggered in two ways:
+This sample workflow can be triggered in two ways:
 
 1.  **Automatically (on Tag Push)**: Pushing a Git tag that starts with `v`
     (e.g., `v1.0.0`) to your repository will automatically trigger the workflow.
@@ -90,47 +133,38 @@ This workflow can be triggered in two ways:
     You will be prompted to enter the tag you wish to create. The release action
     will then create this tag for you on the default branch.
 
-### Inputs
-
-The following inputs can be used to customize the workflow's behavior.
-
-| Input            | Description                                                                          | Required | Default   |
-| ---------------- | ------------------------------------------------------------------------------------ | :------: | --------- |
-| `node-version`   | The version of Node.js to use for the workflow steps.                                |    No    | `20`      |
-| `package-version`| The package version, typically passed from the git tag.                              |   Yes    |           |
-| `build-script`   | The name of the pnpm script to run for building the package. Skips if not present.   |    No    | `'build'` |
-| `test-script`    | The name of the pnpm script to run for testing the package. Skips if not present.    |    No    | `'test'`  |
-| `create-release` | Set to `true` to create a GitHub Release after a successful publish.                 |    No    | `false`   |
-
 ---
 
-### ⚠️ Important: Secret Configuration
+### ⚠️ Important: npmjs Configuration
 
-For this workflow to publish to the npm registry, you **must** configure a
-secret in the repository that uses this workflow.
+For this workflow to publish to the npm registry, you **must** configure your
+package on npmjs to allow GitHub as a `Trusted Publisher`. As this may only be
+configured for packages that exist, you are on the hook for manually publishing
+the first version of the package.
 
-#### How to Set Up the `NPM_PUBLISH` Secret
+Using this workflow you would:
+ - temporarily update `package.json` to have an appropriate version
+ - run `pnpm publish --access public --no-git-checks --tag latest` , replacing
+   the tag as appropriate for the version
 
-1.  **Generate an npm Access Token:**
-    * Navigate to the [Access Tokens page](https://www.npmjs.com/settings/yourusername/tokens) on your
-      npm account (replace `yourusername` with your actual npm username).
-    * Click `Generate New Token` and select the `Granular Access Token` type.
-    * Under `Permissions`, select `Read and Write`.
-    * Under `Package Permissions`, you can scope the token's access as needed,
-      such as setting it for the specific package, or scoping to an entire
-      package scope.
-    * Set an expiration date for your token as appropriate
-    * Click `Generate Token`.
-    * Copy the generated token. **You will not be able to see it again.**
+For packages that have been published at least once, ensure that GitHub is set
+as a `Trusted Publisher` for your package, which you can do by navigating to
+your package page on [npmjs.com](https://npmjs.com) and click on  `Settings`
+(if you do not see it, ensure that you are logged in).
 
-2.  **Add the Token to GitHub Secrets:**
-    * In your GitHub repository, go to `Settings > Secrets and variables > Actions`.
-    * Click `New repository secret`.
-    * For the `Name`, enter `NPM_PUBLISH`.
-    * In the `Secret` box, paste the npm access token you generated.
-    * Click `Add secret`.
+Here, select `Github Actions` as the `Publisher`, and fill out the details for
+the repository. Your GitHub user and repository name will be visible in the bar
+on the right. You must also specify the name of the workflow file, which is
+assumed to exist in `.github/workflows` in the repository.
 
-Once this secret is saved, the workflow will have the necessary permissions to
-publish packages on your behalf. If you set your token to have an expiration
-date, you will need to come back here and refresh as needed once the token
-expires.
+Optionally, you may also specify the GitHub Environment as needed.
+
+Depending on use case, you must check at least one of the two publish options,
+to allow GitHub to either do a manual publish, a staged publish, or both.
+
+Once done, click `Setup Connection` to complete.
+
+> [!note]
+> Once this is complete, this might be a good time to use the options at the
+> bottom of this page to ensure that 2FA is strictly required for publishes that
+> are done outside of GitHub.
