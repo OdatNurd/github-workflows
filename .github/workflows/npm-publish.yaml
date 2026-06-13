@@ -35,53 +35,27 @@ on:
         default: false
 
 jobs:
-  # This job installs dependencies, optionally builds the package if the script
-  # to do so exists, and runs tests to ensure the package is valid before
-  # publishing.
-  test-package:
+  publish-and-release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         name: Check out code
+
       - uses: pnpm/action-setup@v6
         name: Install pnpm
         with:
           run_install: false
+
       - uses: actions/setup-node@v6
         name: Setup node
         with:
           node-version: ${{ inputs.node-version }}
+          registry-url: 'https://registry.npmjs.org/'
           cache: pnpm
-      - name: Get Package Version from Tag
-        run: echo "VERSION=$(echo ${{ inputs.package-version }} | sed -e "s/^v//")" >> $GITHUB_ENV
-      - name: Update package version in control file
-        run: sed -i -e "s/{{VERSION}}/$VERSION/g" package.json
-      - name: Install package dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Build package
-        run: pnpm run --if-present ${{ inputs.build-script }}
-      - name: Run unit tests
-        run: pnpm run --if-present ${{ inputs.test-script }}
 
-  # This job publishes the package to the npm registry. It runs only after the
-  # 'test-package' job has completed successfully.
-  publish-npm:
-    needs: test-package
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        name: Check out code
-      - uses: pnpm/action-setup@v5
-        name: Install pnpm
-        with:
-          run_install: false
-      - uses: actions/setup-node@v6
-        with:
-          node-version: ${{ inputs.node-version }}
-          registry-url: https://registry.npmjs.org/
-          cache: pnpm
       - name: Get Package Version from Tag
         run: echo "VERSION=$(echo ${{ inputs.package-version }} | sed -e "s/^v//")" >> $GITHUB_ENV
+
       - name: Determine NPM distribution tag
         run: |
           if [[ "$VERSION" == *"-"* ]]; then
@@ -93,23 +67,24 @@ jobs:
             echo "NPM_TAG=latest" >> $GITHUB_ENV
             echo "Stable release detected. Publishing to tag: latest"
           fi
+
       - name: Update package version in control file
         run: sed -i -e "s/{{VERSION}}/$VERSION/g" package.json
+
       - name: Install package dependencies
         run: pnpm install --frozen-lockfile
+
       - name: Build package
         run: pnpm run --if-present ${{ inputs.build-script }}
-      - name: Publish package
-        run: pnpm publish --access public --no-git-checks --tag ${{ env.NPM_TAG }}
 
-  # This job creates a new GitHub Release. It only runs if the 'publish-npm' job
-  # was successful and the 'create-release' input was set to true.
-  create-github-release:
-    needs: publish-npm
-    if: inputs.create-release == true
-    runs-on: ubuntu-latest
-    steps:
+      - name: Run unit tests
+        run: pnpm run --if-present ${{ inputs.test-script }}
+
+      - name: Publish package
+        run: pnpm publish --access public --no-git-checks --tag ${{ env.NPM_TAG }} --provenance
+
       - name: Create GitHub Release
+        if: inputs.create-release == true
         uses: softprops/action-gh-release@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
