@@ -4,6 +4,7 @@ This repository contains reusable GitHub Actions workflows designed to
 standardize and simplify common CI/CD tasks across projects.
 
   - [NPM Package Publishing](#npm-publish-workflow) \[[npm-publish-v1.0.4](https://github.com/odatnurd/github-workflows/blob/npm-publish-v1.0.4/.github/workflows/npm-publish.yaml)\]
+  - [Update Site After Package Publish](#update-site-workflow) \[[update-site-v1.0.0](https://github.com/odatnurd/github-workflows/blob/update-site-v1.0.0/.github/workflows/update-site.yaml)\]
 
 ---
 
@@ -168,3 +169,95 @@ Once done, click `Setup Connection` to complete.
 > Once this is complete, this might be a good time to use the options at the
 > bottom of this page to ensure that 2FA is strictly required for publishes that
 > are done outside of GitHub.
+
+---
+
+## Update Site Workflow
+
+This workflow waits for a specific package version to appear in the npm
+registry, then dispatches the site deployment workflow. It replaces fixed
+sleeps with a configurable poll so that the site is only rebuilt after the
+registry has the version that was just published.
+
+On a normal tag release, the caller passes `github.event.workflow_run.head_branch`
+as `package-version`; because the publish workflow runs from the tag, this is
+the version that was just published. A version with a leading `v` is accepted
+and the `v` is stripped automatically.
+
+Automatic updates only run for successful `v*` tag publishes. A publish started
+with `workflow_dispatch` does not expose its tag to `workflow_run`, so trigger
+the package's update-site workflow manually with the version in that case.
+
+Prereleases do not move the default `latest` distribution tag. Unless `dist-tag`
+is set to a different value, a version containing a hyphen is skipped instead of
+waiting for it forever.
+
+
+### Workflow Steps
+
+```mermaid
+graph LR
+    A[wait for registry version] --> B{version found?};
+    B -->|yes| C[dispatch site workflow];
+    B -->|timeout| D[fail without rebuilding];
+```
+
+
+### Inputs
+
+The following inputs can be used to customize the workflow's behavior.
+
+| Input | Description | Required | Default |
+| --- | --- | :---: | --- |
+| `package-name` | The npm package name, including its scope. | Yes | |
+| `package-version` | The package version to wait for, optionally prefixed with `v`. | Yes | |
+| `poll-interval-seconds` | Seconds between registry checks. | No | `10` |
+| `poll-timeout-seconds` | Maximum number of seconds to wait for the version. | No | `300` |
+| `registry-url` | Base URL of the npm registry. | No | `https://registry.npmjs.org` |
+| `dist-tag` | Distribution tag to check. | No | `latest` |
+| `site-repository` | Repository containing the site workflow. | No | `OdatNurd/odatnurd.net` |
+| `site-workflow` | Site workflow file to dispatch. | No | `deploy_astro.yml` |
+| `site-ref` | Site repository ref to deploy. | No | `published` |
+| `clear-npm-cache` | Clear the npm cache in the site build. | No | `true` |
+
+The caller must also provide the `site-trigger-token` secret. It needs permission
+to dispatch workflows in the site repository; in the package repositories this
+is currently stored as `ASTRO_SITE_TRIGGER_TOKEN`.
+
+
+### Usage
+
+The workflow can be called automatically from a package repository's
+`workflow_run` trigger. The example below also adds a manual trigger so the
+site update can be retried with an explicit version if needed.
+
+```yaml
+name: Update Homepage on Package Publish
+
+on:
+  workflow_run:
+    workflows: ["Publish to NPMJS"]
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      package-version:
+        description: 'The published tag to wait for, e.g. v1.2.3'
+        required: true
+        type: string
+
+jobs:
+  update-site:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch || '', 'v')) }}
+    uses: odatnurd/github-workflows/.github/workflows/update-site.yaml@update-site-v1.0.0
+    with:
+      package-name: '@odatnurd/example'
+      package-version: ${{ github.event_name == 'workflow_dispatch' && inputs.package-version || github.event.workflow_run.head_branch }}
+    secrets:
+      site-trigger-token: ${{ secrets.ASTRO_SITE_TRIGGER_TOKEN }}
+```
+
+The shared workflow can also be run directly from the Actions tab of this
+repository by choosing `Update Site After Package Publish` and entering the
+package name and version. The `site-trigger-token` secret must be configured in
+this repository for a direct manual run.

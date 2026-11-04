@@ -1,0 +1,219 @@
+name: Update Site After Package Publish
+
+on:
+  workflow_call:
+    inputs:
+      # The package to wait for, including its scope.
+      package-name:
+        required: true
+        type: string
+
+      # The version to wait for, optionally prefixed with a v.
+      package-version:
+        required: true
+        type: string
+
+      # How long to wait between registry checks, and how long to wait before
+      # giving up on the version appearing.
+      poll-interval-seconds:
+        required: false
+        type: number
+        default: 10
+      poll-timeout-seconds:
+        required: false
+        type: number
+        default: 300
+
+      # The npm registry and distribution tag to check.
+      registry-url:
+        required: false
+        type: string
+        default: 'https://registry.npmjs.org'
+      dist-tag:
+        required: false
+        type: string
+        default: latest
+
+      # The site repository and workflow to trigger once the version is live.
+      site-repository:
+        required: false
+        type: string
+        default: OdatNurd/odatnurd.net
+      site-workflow:
+        required: false
+        type: string
+        default: deploy_astro.yml
+      site-ref:
+        required: false
+        type: string
+        default: published
+      clear-npm-cache:
+        required: false
+        type: boolean
+        default: true
+
+    secrets:
+      site-trigger-token:
+        description: 'A token with permission to dispatch workflows in the site repository.'
+        required: true
+
+  # This also makes the shared workflow directly runnable from the Actions tab.
+  # A caller normally provides these values through workflow_call instead.
+  workflow_dispatch:
+    inputs:
+      package-name:
+        description: 'The package to wait for, including its scope.'
+        required: true
+        type: string
+      package-version:
+        description: 'The version to wait for, e.g. v1.2.3 or 1.2.3.'
+        required: true
+        type: string
+      poll-interval-seconds:
+        description: 'Seconds between registry checks.'
+        required: false
+        type: number
+        default: 10
+      poll-timeout-seconds:
+        description: 'Maximum seconds to wait for the version.'
+        required: false
+        type: number
+        default: 300
+      registry-url:
+        description: 'Base URL of the npm registry.'
+        required: false
+        type: string
+        default: 'https://registry.npmjs.org'
+      dist-tag:
+        description: 'The distribution tag to wait for.'
+        required: false
+        type: string
+        default: latest
+      site-repository:
+        description: 'Repository containing the site workflow.'
+        required: false
+        type: string
+        default: OdatNurd/odatnurd.net
+      site-workflow:
+        description: 'The site workflow file to dispatch.'
+        required: false
+        type: string
+        default: deploy_astro.yml
+      site-ref:
+        description: 'The site repository ref to deploy.'
+        required: false
+        type: string
+        default: published
+      clear-npm-cache:
+        description: 'Clear the npm cache in the site build.'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  update-site:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Wait for the package version to reach the registry
+        id: wait
+        env:
+          PACKAGE_NAME: ${{ inputs.package-name }}
+          PACKAGE_VERSION: ${{ inputs.package-version }}
+          POLL_INTERVAL_SECONDS: ${{ inputs.poll-interval-seconds }}
+          POLL_TIMEOUT_SECONDS: ${{ inputs.poll-timeout-seconds }}
+          REGISTRY_URL: ${{ inputs.registry-url }}
+          DIST_TAG: ${{ inputs.dist-tag }}
+        run: |
+          set -euo pipefail
+
+          version="${PACKAGE_VERSION#v}"
+
+          if [[ -z "$version" ]]; then
+            echo "::error::A package version is required."
+            exit 1
+          fi
+
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "::error::'$PACKAGE_VERSION' is not a package version. Use the tag that was published (for example, v1.2.3)."
+            exit 1
+          fi
+
+          for name in POLL_INTERVAL_SECONDS POLL_TIMEOUT_SECONDS; do
+            value="${!name}"
+            if [[ ! "$value" =~ ^[0-9]+$ ]] || (( value < 1 )); then
+              echo "::error::$name must be a positive integer, got '$value'."
+              exit 1
+            fi
+          done
+
+          # A prerelease does not move the default latest tag. Skip it unless
+          # the caller explicitly asks to follow a different distribution tag.
+          if [[ "$version" == *-* && "$DIST_TAG" == "latest" ]]; then
+            echo "::notice::$PACKAGE_NAME@$version is a prerelease and does not update the latest dist-tag; skipping site update."
+            echo "trigger=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          encoded_name="$(printf '%s' "$PACKAGE_NAME" | jq -sRr @uri)"
+          registry_url="${REGISTRY_URL%/}"
+          package_url="${registry_url}/${encoded_name}"
+          started=$SECONDS
+          deadline=$((started + POLL_TIMEOUT_SECONDS))
+          attempt=0
+          last_current='<unset>'
+
+          echo "Waiting for $PACKAGE_NAME@$version under dist-tag '$DIST_TAG'..."
+          echo "Registry: $package_url"
+
+          while true; do
+            attempt=$((attempt + 1))
+
+            response="$(curl --silent --fail --location \
+              --connect-timeout 10 --max-time 30 \
+              -H 'Cache-Control: no-cache' \
+              "${package_url}?t=$(date +%s%N)")" || response=''
+
+            current="$(printf '%s' "$response" \
+              | jq -r --arg tag "$DIST_TAG" '."dist-tags"[$tag] // empty' 2>/dev/null \
+              || true)"
+
+            if [[ "$current" == "$version" ]]; then
+              elapsed=$((SECONDS - started))
+              echo "Found $PACKAGE_NAME@$version after ${elapsed}s."
+              echo "trigger=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            if [[ "$current" != "$last_current" ]]; then
+              echo "Attempt $attempt: registry reports '${current:-not found}'."
+              last_current="$current"
+            fi
+
+            if (( SECONDS >= deadline )); then
+              echo "::error::Timed out after ${POLL_TIMEOUT_SECONDS}s waiting for $PACKAGE_NAME@$version under dist-tag '$DIST_TAG' (last: '${current:-not found}')."
+              exit 1
+            fi
+
+            sleep "$POLL_INTERVAL_SECONDS"
+          done
+
+      - name: Trigger the site rebuild
+        if: ${{ steps.wait.outputs.trigger == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.site-trigger-token }}
+          SITE_REPOSITORY: ${{ inputs.site-repository }}
+          SITE_WORKFLOW: ${{ inputs.site-workflow }}
+          SITE_REF: ${{ inputs.site-ref }}
+          CLEAR_NPM_CACHE: ${{ inputs.clear-npm-cache }}
+        run: |
+          set -euo pipefail
+
+          echo "Triggering $SITE_WORKFLOW in $SITE_REPOSITORY on $SITE_REF..."
+          gh workflow run "$SITE_WORKFLOW" \
+            --repo "$SITE_REPOSITORY" \
+            --ref "$SITE_REF" \
+            -f clear_npm_cache="$CLEAR_NPM_CACHE"
