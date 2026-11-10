@@ -3,7 +3,7 @@
 This repository contains reusable GitHub Actions workflows designed to
 standardize and simplify common CI/CD tasks across projects.
 
-  - [NPM Package Publishing](#npm-publish-workflow) \[[npm-publish-v1.0.4](https://github.com/odatnurd/github-workflows/blob/npm-publish-v1.0.4/.github/workflows/npm-publish.yaml)\]
+  - [NPM Package Publishing](#npm-publish-workflow) \[[npm-publish-v2.0.0](https://github.com/odatnurd/github-workflows/blob/npm-publish-v2.0.0/.github/workflows/npm-publish.yaml)\]
   - [Update Site After Package Publish](#update-site-workflow) \[[update-site-v1.0.0](https://github.com/odatnurd/github-workflows/blob/update-site-v1.0.0/.github/workflows/update-site.yaml)\]
 
 ---
@@ -44,7 +44,7 @@ The following inputs can be used to customize the workflow's behavior.
 | Input            | Description                                                                          | Required | Default   |
 | ---------------- | ------------------------------------------------------------------------------------ | :------: | --------- |
 | `node-version`   | The version of Node.js to use for the workflow steps.                                |    No    | `24`      |
-| `package-version`| The package version, typically passed from the git tag.                              |   Yes    |           |
+| `package-version`| The release tag and package version. Must name an existing tag.                       |   Yes    |           |
 | `build-script`   | The name of the pnpm script to run for building the package. Skips if not present.   |    No    | `'build'` |
 | `test-script`    | The name of the pnpm script to run for testing the package. Skips if not present.    |    No    | `'test'`  |
 | `create-release` | Set to `true` to create a GitHub Release after a successful publish.                 |    No    | `false`   |
@@ -109,11 +109,11 @@ jobs:
     permissions:
       contents: write # Required to create the GitHub Release
       id-token: write # Required for NPM OIDC Trusted Publishing
-    uses: odatnurd/github-workflows/.github/workflows/npm-publish.yaml@npm-publish-v1.0.4
+    uses: odatnurd/github-workflows/.github/workflows/npm-publish.yaml@npm-publish-v2.0.0
     with:
       node-version: 24
-      # Use the user-provided tag if manually triggered, otherwise use the tag
-      # from the push event.
+      # The tag to publish. It must already exist; the workflow checks it out
+      # rather than creating it.
       package-version: ${{ (github.event_name == 'workflow_dispatch' && inputs.tag) || github.ref_name }}
       build-script: 'build'
       test-script: 'test'
@@ -125,14 +125,42 @@ jobs:
 
 This sample workflow can be triggered in two ways:
 
-1.  **Automatically (on Tag Push)**: Pushing a Git tag that starts with `v`
-    (e.g., `v1.0.0`) to your repository will automatically trigger the workflow.
-    The workflow will use the pushed tag name as the `package-version`.
+1.  **Automatically (on Tag Push)**: Push a Git tag that starts with `v`
+    (e.g., `v1.0.0`) to your repository. The workflow checks out the pushed
+    tag and uses the tag name as the `package-version`. A tag created through
+    the GitHub UI should use the manual path instead, because creating a tag
+    that way is not a Git tag push.
 
-2.  **Manually (via UI)**: Navigate to the "Actions" tab in your GitHub
-    repository, select this workflow, and click the "Run workflow" button.
-    You will be prompted to enter the tag you wish to create. The release action
-    will then create this tag for you on the default branch.
+2.  **Manually (via UI or API)**: Create the tag at the commit you intend to
+    release, then run this workflow and enter that exact tag name. The workflow
+    checks out the existing tag and publishes it; it does not create a tag. The
+    branch selected for the dispatch does not affect the code that is published.
+    If the tag does not exist, the run fails before building or publishing.
+
+> [!IMPORTANT]
+> Manual publishing requires an existing tag. This is a change from earlier
+> versions of this workflow, which created the tag on the default branch during
+> a manual run.
+
+### Retries and Existing Versions
+
+Re-running a failed tag-triggered run is safe. The run remains tied to the tag
+commit, and the workflow verifies the tag and version again before doing any
+work.
+
+If the package version was already published, the registry rejects the
+duplicate; an existing version is never overwritten. The workflow also checks
+npm before installing, building, or testing so that this case fails early. The
+registry check is an early guard; `pnpm publish` remains the final duplicate
+check.
+
+If publishing succeeded but a later step such as GitHub Release creation failed,
+re-running the publish workflow will stop at the existing version. Complete the
+remaining release step separately.
+
+Manual dispatches do not provide tag-push metadata to `workflow_run`-based
+follow-on workflows. If your repository has such workflows, trigger them
+explicitly with the published version.
 
 ---
 

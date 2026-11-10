@@ -7,8 +7,8 @@ on:
         type: number
         default: 24
 
-      # The package version, typically passed from the git tag that triggered
-      # the workflow.
+      # The release tag and package version. The tag must already exist; it is
+      # checked out before the package is built.
       package-version:
         required: true
         type: string
@@ -39,7 +39,39 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-        name: Check out code
+        name: Check out repository
+        with:
+          fetch-depth: 0
+
+      - name: Verify release tag exists
+        env:
+          RELEASE_TAG: ${{ inputs.package-version }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$RELEASE_TAG" || "$RELEASE_TAG" == refs/* ]]; then
+            echo "::error::A release tag name is required (for example, v1.2.3)."
+            exit 1
+          fi
+
+          if ! git check-ref-format "refs/tags/${RELEASE_TAG}"; then
+            echo "::error::'$RELEASE_TAG' is not a valid Git tag name."
+            exit 1
+          fi
+
+          git fetch --force --tags origin
+
+          if ! git rev-parse --verify --quiet "refs/tags/${RELEASE_TAG}^{commit}" > /dev/null; then
+            echo "::error::Tag '$RELEASE_TAG' does not exist in this repository. Create and push the tag before publishing."
+            exit 1
+          fi
+
+      - name: Check out release tag
+        env:
+          RELEASE_TAG: ${{ inputs.package-version }}
+        run: |
+          set -euo pipefail
+          git checkout --detach "refs/tags/${RELEASE_TAG}"
 
       - uses: pnpm/action-setup@v6
         name: Install pnpm
@@ -54,7 +86,11 @@ jobs:
           cache: pnpm
 
       - name: Get Package Version from Tag
-        run: echo "VERSION=$(echo ${{ inputs.package-version }} | sed -e "s/^v//")" >> $GITHUB_ENV
+        env:
+          RELEASE_TAG: ${{ inputs.package-version }}
+        run: |
+          set -euo pipefail
+          printf 'VERSION=%s\n' "${RELEASE_TAG#v}" >> "$GITHUB_ENV"
 
       - name: Determine NPM distribution tag
         run: |
@@ -70,6 +106,38 @@ jobs:
 
       - name: Update package version in control file
         run: sed -i -e "s/{{VERSION}}/$VERSION/g" package.json
+
+      - name: Verify npm version is unpublished
+        env:
+          RELEASE_VERSION: ${{ inputs.package-version }}
+        run: |
+          set -euo pipefail
+
+          version="${RELEASE_VERSION#v}"
+          package_name="$(node -p "require('./package.json').name")"
+          encoded_name="$(PACKAGE_NAME="$package_name" node -p 'encodeURIComponent(process.env.PACKAGE_NAME)')"
+          encoded_version="$(VERSION="$version" node -p 'encodeURIComponent(process.env.VERSION)')"
+
+          if ! status="$(curl --silent --show-error --location --max-time 30 \
+            --header 'Cache-Control: no-cache' \
+            --output /dev/null --write-out '%{http_code}' \
+            "https://registry.npmjs.org/${encoded_name}/${encoded_version}")"; then
+            status=000
+          fi
+
+          case "$status" in
+            200)
+              echo "::error::${package_name}@${version} already exists on npm; refusing to build or publish it."
+              exit 1
+              ;;
+            404)
+              echo "${package_name}@${version} is not published yet."
+              ;;
+            *)
+              echo "::error::Could not verify ${package_name}@${version} on npm (HTTP ${status}); refusing to publish."
+              exit 1
+              ;;
+          esac
 
       - name: Install package dependencies
         run: pnpm install --frozen-lockfile
